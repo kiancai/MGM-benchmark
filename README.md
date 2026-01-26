@@ -5,9 +5,12 @@
 ![](https://img.shields.io/badge/status-beta-yellow?style=flat) 
 ![](https://img.shields.io/github/license/HUST-NingKang-Lab/MGM?style=flat) 
 
+🎊 MGM has been published in [*Advanced Science* ](https://advanced.onlinelibrary.wiley.com/doi/10.1002/advs.202513333).
+
 **Microbial General Model (MGM)** is a large-scale pretrained language model designed for interpretable microbiome data analysis. MGM supports a variety of tasks, including data preparation, model training, and inference, making it a versatile tool for microbiome research.
 
 ![MGM Pipeline](pipeline.png)
+
 
 ## Installation
 
