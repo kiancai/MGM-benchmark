@@ -19,32 +19,88 @@ from transformers import (
 )
 from transformers.trainer_callback import EarlyStoppingCallback
 
-def finetune(cfg, args):
-    corpus = load(open(args.input, "rb"))
-    tokenizer = corpus.tokenizer
-    labels = pd.read_csv(args.labels, index_col=0)
+
+def _build_dataset_from_corpus(corpus, labels_path, label_encoder=None):
+    """
+    从 corpus + labels CSV 构建 SequenceClassificationDataset。
+
+    如果传入 label_encoder，则用它 transform（predict 场景）；
+    否则 fit_transform 并返回新的 label_encoder。
+    """
+    labels = pd.read_csv(labels_path, index_col=0)
     if set(corpus.data.index) != set(labels.index):
-        # warning
         print(
-            "Warning: the sample IDs in the abundance table and the metadata table are not the same."
-            "The samples in the metadata table but not in the abundance table will be removed."
+            "Warning: the sample IDs in the abundance table and the metadata table are not the same. "
+            "The samples in the metadata table but not in the abundance table will be removed. "
             "This may happened because some samples were removed for all zero counts during the preprocessing of the abundance table."
         )
     labels = labels.loc[corpus.data.index]
 
-    # label encoding
-    le = OneHotEncoder()
-    labels = le.fit_transform(labels.values.reshape(-1, 1)).toarray()
-    labels = torch.tensor(labels.argmax(axis=1))
+    if label_encoder is None:
+        le = OneHotEncoder()
+        labels_encoded = le.fit_transform(labels.values.reshape(-1, 1)).toarray()
+    else:
+        le = label_encoder
+        labels_encoded = le.transform(labels.values.reshape(-1, 1)).toarray()
 
-    # packing into dataset
+    labels_tensor = torch.tensor(labels_encoded.argmax(axis=1))
+
     dataset = SequenceClassificationDataset(
-        corpus[:]["input_ids"], corpus[:]["attention_mask"], labels
+        corpus[:]["input_ids"], corpus[:]["attention_mask"], labels_tensor
     )
+    return dataset, le
+
+
+def finetune(cfg, args):
+    # --- 判断是否使用外部分割模式 ---
+    use_external_split = args.train_corpus is not None and args.val_corpus is not None
+
+    if use_external_split:
+        # 外部分割模式：分别加载 train/val corpus
+        print("Using external split mode (separate train/val corpus)")
+        train_corpus = load(open(args.train_corpus, "rb"))
+        val_corpus = load(open(args.val_corpus, "rb"))
+        tokenizer = train_corpus.tokenizer
+
+        # 构建 train dataset
+        train_set, le = _build_dataset_from_corpus(train_corpus, args.labels)
+
+        # 构建 val dataset（用同一个 label_encoder）
+        val_labels_path = args.val_labels if args.val_labels else args.labels
+        val_set, _ = _build_dataset_from_corpus(val_corpus, val_labels_path, label_encoder=le)
+
+        print(f"  Train: {len(train_set)} samples, Val: {len(val_set)} samples")
+    else:
+        # 原始模式：单 corpus + 内部随机 split
+        corpus = load(open(args.input, "rb"))
+        tokenizer = corpus.tokenizer
+        labels = pd.read_csv(args.labels, index_col=0)
+        if set(corpus.data.index) != set(labels.index):
+            print(
+                "Warning: the sample IDs in the abundance table and the metadata table are not the same."
+                "The samples in the metadata table but not in the abundance table will be removed."
+                "This may happened because some samples were removed for all zero counts during the preprocessing of the abundance table."
+            )
+        labels = labels.loc[corpus.data.index]
+
+        # label encoding
+        le = OneHotEncoder()
+        labels = le.fit_transform(labels.values.reshape(-1, 1)).toarray()
+        labels = torch.tensor(labels.argmax(axis=1))
+
+        # packing into dataset
+        dataset = SequenceClassificationDataset(
+            corpus[:]["input_ids"], corpus[:]["attention_mask"], labels
+        )
+
+        split = args.val_split
+        train_size = int(len(corpus) * (1 - split))
+        val_size = len(corpus) - train_size
+        train_set, val_set = random_split(dataset, [train_size, val_size])
 
     # set model config
     model = GPT2ForSequenceClassification.from_pretrained(args.model, num_labels=len(le.categories_[0]))
-    
+
     # set training args
     training_args = {
         "learning_rate": cfg.getfloat("finetune", "learning_rate"),
@@ -71,12 +127,6 @@ def finetune(cfg, args):
     print(f"Start training...")
     model = model.train()
 
-    split = args.val_split
-    
-    train_size = int(len(corpus) * (1 - split))  
-    val_size = len(corpus) - train_size  # Ensures the sum matches the dataset length  
-    train_set, val_set = random_split(dataset, [train_size, val_size])  
-
     callbacks = [EarlyStoppingCallback(early_stopping_patience=10)]
 
     trainer = Trainer(
@@ -91,7 +141,7 @@ def finetune(cfg, args):
     os.makedirs(args.output, exist_ok=True)
     trainer.save_model(args.output)
     dump(le, open(os.path.join(args.output, "label_encoder.pkl"), "wb"))
-    
+
 
     # save logs
     logs = trainer.state.log_history

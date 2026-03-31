@@ -83,6 +83,13 @@ def get_CLI_parser():
                                     'and properly labeled data must be provided.\n'
                                     'use `-model` option to indicate a customized MGM model.\n'
                                     'Input: corpus in pkl file, label file in csv format, output: finetuned MGM model')
+    # 外部分割支持：当同时提供 --train-corpus 和 --val-corpus 时，跳过内部随机 split
+    finetune.add_argument('--train-corpus', type=str, default=None,
+                          help='Path to train corpus pkl (external split mode). Must be used with --val-corpus.')
+    finetune.add_argument('--val-corpus', type=str, default=None,
+                          help='Path to val corpus pkl (external split mode). Must be used with --train-corpus.')
+    finetune.add_argument('--val-labels', type=str, default=None,
+                          help='Path to val labels csv (external split mode). If not provided, uses --labels for both.')
 
     # ------------------------------------------------------------------------------------------------------------------
     predict = parser.add_argument_group(
