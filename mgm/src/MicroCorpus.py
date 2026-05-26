@@ -20,9 +20,17 @@ class MicroTokenizer(PreTrainedTokenizer):
         return list(text)
     
     def _add_tokens(self, new_tokens: List[str], special_tokens: bool = False) -> int:
-        self.toks.extend(new_tokens)
+        # bug fix（非算法改动）：原版无 return 且无条件 extend —— transformers≥4.x 的
+        # add_tokens 期望返回 int（int+=None 会崩），且重复 token 会被重复 extend。
+        # 改为幂等 + 返回新增数。
+        added = 0
+        for t in new_tokens:
+            if t not in self.vocab:
+                self.toks.append(t)
+                added += 1
         self.vocab = {v: i for i, v in enumerate(self.toks)}
         self.ids_to_tokens = {i: v for i, v in enumerate(self.toks)}
+        return added
     
     def _convert_token_to_id(self, token):
         return self.vocab[token]

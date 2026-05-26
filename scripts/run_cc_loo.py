@@ -65,7 +65,7 @@ def main():
     splits_root = Path(args.splits_dir)
     out_root = Path(args.output_dir)
 
-    n_done = n_run = 0
+    n_done = n_run = n_fail = 0
     for disease in args.diseases:
         ddir = splits_root / disease
         if not ddir.is_dir():
@@ -73,12 +73,24 @@ def main():
             continue
         label_field = f"Role_{disease}"
         for fold in _list_folds(ddir):
+            train_npy = ddir / f"fold_{fold}_train.npy"
             inner_train = ddir / f"fold_{fold}_inner_train.npy"
             inner_val = ddir / f"fold_{fold}_inner_val.npy"
             test = ddir / f"fold_{fold}_test.npy"
-            if not (inner_train.exists() and inner_val.exists() and test.exists()):
+            if not (test.exists() and (inner_train.exists() or train_npy.exists())):
                 print(f"[skip] {disease} fold {fold}: missing split files")
                 continue
+            # inner split：优先现成 inner_*（与 MiCoFormer 调 epoch 对齐）；否则（COVID/LatentTB
+            # 无 inner）从 train.npy 现切，固定 seed=0 → 跨 model seed 一致、可复现。
+            # MGM 早停用 val 的 CE loss（非 AUROC），故 inner_val 不强求双类。
+            if inner_train.exists() and inner_val.exists():
+                tr_idx, va_idx = np.load(inner_train), np.load(inner_val)
+            else:
+                full = np.load(train_npy)
+                perm = np.random.RandomState(0).permutation(len(full))
+                n_val = max(1, int(round(len(full) * 0.15)))
+                va_idx, tr_idx = full[perm[:n_val]], full[perm[n_val:]]
+            te_idx = np.load(test)
             for seed in args.seeds:
                 fold_out = out_root / f"variant_{args.variant}" / disease / f"fold_{fold}_seed{seed}"
                 # 断点续跑：已有结果文件则跳过
@@ -87,24 +99,29 @@ def main():
                     print(f"[done] {disease} fold {fold} seed {seed}")
                     continue
                 print(f"\n=== {disease} fold {fold} seed {seed} (variant {args.variant}) ===")
-                run_controlled(
-                    h5ad_path=args.h5ad,
-                    train_indices=np.load(inner_train),
-                    val_indices=np.load(inner_val),
-                    test_indices=np.load(test),
-                    label_field=label_field,
-                    label_values=["control", "case"],
-                    seed=seed,
-                    output_dir=fold_out,
-                    pretrained_model=args.pretrained_model,
-                    disease_group=disease,
-                    test_study=f"fold{fold}",
-                    val_study=None,
-                    variant=args.variant,
-                )
-                n_run += 1
+                try:
+                    run_controlled(
+                        h5ad_path=args.h5ad,
+                        train_indices=tr_idx,
+                        val_indices=va_idx,
+                        test_indices=te_idx,
+                        label_field=label_field,
+                        label_values=["control", "case"],
+                        seed=seed,
+                        output_dir=fold_out,
+                        pretrained_model=args.pretrained_model,
+                        disease_group=disease,
+                        test_study=f"fold{fold}",
+                        val_study=None,
+                        variant=args.variant,
+                    )
+                    n_run += 1
+                except Exception as e:
+                    # 一折失败不中断整轮；未写 metrics，故下次断点续跑会重试
+                    print(f"[FAIL] {disease} fold {fold} seed {seed}: {type(e).__name__}: {e}")
+                    n_fail += 1
 
-    print(f"\nFinished. ran={n_run}, skipped(done)={n_done}")
+    print(f"\nFinished. ran={n_run}, skipped(done)={n_done}, failed={n_fail}")
 
 
 if __name__ == "__main__":
