@@ -4,3 +4,10 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 build/
+
+# benchmark 产物(可重跑,海量 finetune ckpt/预测,数百 GB) —— 切勿入 git
+output/
+tmp_trainer/
+results/
+*.ckpt
+events.out.tfevents.*
