@@ -185,11 +185,35 @@ def run_controlled(
 
     # ─── Step 2: construct corpus ──────────────────────────────────────────
     print("Step 2: Constructing corpus...")
-    for split in ["train", "val"] + (["test"] if test_indices is not None else []):
-        abu = output_dir / f"{split}_abundance.csv"
-        pkl = output_dir / f"{split}_corpus.pkl"
-        if abu.exists():
-            _run_mgm_cmd(["construct", "-i", str(abu), "-o", str(pkl)], cwd=mgm_root)
+    splits = ["train", "val"] + (["test"] if test_indices is not None else [])
+    if variant == "B":
+        # 方案 B：用我们的 tokenizer/phylogeny（8118 词表）construct，匹配 B 预训练 ckpt；
+        # 不能走 mgm construct CLI（它写死 MGM 自带 9665 词表，token id 会对不上 B ckpt）。
+        from pickle import load as _pload, dump as _pdump
+        import pandas as _pd
+        from mgm.src.MicroCorpus import MicroCorpus as _MC
+        # tmp 已归档,优先用 tmp 现路径(用户重做 B 时会重生),不在则 fallback 归档副本
+        import os as _os
+        _B_TOK_TMP  = "/home/cml_lab/caiqy/project/MCFProjet/tmp/20260526_mgm_benchmark/our_tokenizer.pkl"
+        _B_PHY_TMP  = "/home/cml_lab/caiqy/project/MCFProjet/tmp/20260526_mgm_benchmark/our_phylogeny.csv"
+        _B_TOK_ARCH = "/home/cml_lab/caiqy/project/MCFProjet/archive/experiments/20260527_full_benchmark/mgm/assets/our_tokenizer.pkl"
+        _B_PHY_ARCH = "/home/cml_lab/caiqy/project/MCFProjet/archive/experiments/20260527_full_benchmark/mgm/assets/our_phylogeny.csv"
+        _B_TOK = _B_TOK_TMP if _os.path.exists(_B_TOK_TMP) else _B_TOK_ARCH
+        _B_PHY = _B_PHY_TMP if _os.path.exists(_B_PHY_TMP) else _B_PHY_ARCH
+        _tok = _pload(open(_B_TOK, "rb"))
+        for split in splits:
+            abu = output_dir / f"{split}_abundance.csv"
+            pkl = output_dir / f"{split}_corpus.pkl"
+            if abu.exists():
+                _abu_df = _pd.read_csv(abu, index_col=0).T  # samples × genera
+                _corpus = _MC(abu=_abu_df, tokenizer=_tok, phylogeny_path=_B_PHY)
+                _pdump(_corpus, open(pkl, "wb"))
+    else:
+        for split in splits:
+            abu = output_dir / f"{split}_abundance.csv"
+            pkl = output_dir / f"{split}_corpus.pkl"
+            if abu.exists():
+                _run_mgm_cmd(["construct", "-i", str(abu), "-o", str(pkl)], cwd=mgm_root)
 
     # ─── Step 3: finetune ─────────────────────────────────────────────────
     print("Step 3: Finetuning...")
