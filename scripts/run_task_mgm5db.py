@@ -98,6 +98,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", help="Fold corpus cache shared by finetune seeds")
     parser.add_argument("--work-dir", help="Ephemeral per-fit work root; failed fits are retained")
     parser.add_argument("--diseases", nargs="+", default=None)
+    parser.add_argument(
+        "--allow-noncanonical-task",
+        action="store_true",
+        help=(
+            "Explicitly permit a separately fingerprinted compact task. Default "
+            "refuses anything other than the canonical 11-disease/69-fold contract."
+        ),
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 52, 62])
     parser.add_argument("--validation-fraction", type=float, default=0.15)
     parser.add_argument("--inner-split-seed", type=int, default=0)
@@ -636,10 +644,11 @@ def main() -> None:
     try:
         n_all_folds = validate_task_folds(task)
         validate_task_corpus_alignment(task, adata)
-        if len(task.diseases) != 11 or n_all_folds != 69:
+        if (len(task.diseases) != 11 or n_all_folds != 69) and not args.allow_noncanonical_task:
             raise ValueError(
                 f"Canonical task must contain 11 diseases/69 folds, got "
-                f"{len(task.diseases)}/{n_all_folds}"
+                f"{len(task.diseases)}/{n_all_folds}; pass --allow-noncanonical-task "
+                "only for a separately fingerprinted task contract"
             )
         assets = _load_assets(
             Path(args.model_dir), Path(args.tokenizer), Path(args.phylogeny), adata
@@ -711,6 +720,7 @@ def main() -> None:
         source_snapshot = source_fingerprint([runner_path, *support_sources, *mgm_sources])
         contract = {
             "protocol_id": task.contract_id,
+            "noncanonical_task_acknowledged": bool(args.allow_noncanonical_task),
             "task_dir": str(task.task_dir),
             "task_manifest_sha256": sha256_file(task.task_dir / "label_manifest.json"),
             "task_payload_fingerprint": actual_payload,
